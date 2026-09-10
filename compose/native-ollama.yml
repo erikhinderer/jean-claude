@@ -1,0 +1,17 @@
+# Use an Ollama installed directly on the host instead of the container.
+# For Windows 11 (the SER9 Pro's dual-boot option) or macOS: Docker Desktop
+# cannot pass the AMD iGPU into containers there, but native Ollama can use it
+# (Vulkan on Windows, Metal on macOS). Open WebUI and model-init still run in Docker.
+# Start native Ollama with the same tuning, e.g. on Windows (PowerShell):
+#   setx OLLAMA_FLASH_ATTENTION 1; setx OLLAMA_KV_CACHE_TYPE q8_0; setx OLLAMA_KEEP_ALIVE -1
+services:
+  ollama:
+    profiles: ["disabled"]
+  model-init:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      OLLAMA_HOST: "http://host.docker.internal:11434"
+  open-webui:
+    environment:
+      OLLAMA_BASE_URL: "http://host.docker.internal:11434"

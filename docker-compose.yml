@@ -1,0 +1,114 @@
+# Jean Claude — Qwen3-Coder-30B-A3B (Q5_K_M) on Ollama + Open WebUI
+#
+# This base file is backend-agnostic (it runs CPU-only on its own).
+# GPU acceleration is layered on via COMPOSE_FILE in .env:
+#   vulkan : docker-compose.yml:compose/gpu-vulkan.yml   (default on the SER9 Pro)
+#   rocm   : docker-compose.yml:compose/gpu-rocm.yml
+#   cpu    : docker-compose.yml
+#   native : docker-compose.yml:compose/native-ollama.yml (Ollama installed on the host, e.g. Windows)
+# Run `make backend B=<name>` to switch, or edit COMPOSE_FILE in .env.
+
+name: jean-claude
+
+x-ollama-env: &ollama-env
+  OLLAMA_HOST: "0.0.0.0:11434"
+  # Keep the 21.7 GB model resident so every chat doesn't pay a reload.
+  OLLAMA_KEEP_ALIVE: "${OLLAMA_KEEP_ALIVE:--1}"
+  # Single-user box: one model, one request slot. Parallel slots multiply KV-cache memory.
+  OLLAMA_MAX_LOADED_MODELS: "${OLLAMA_MAX_LOADED_MODELS:-1}"
+  OLLAMA_NUM_PARALLEL: "${OLLAMA_NUM_PARALLEL:-1}"
+  # Flash attention is required for a quantized KV cache; q8_0 halves KV memory vs f16.
+  OLLAMA_FLASH_ATTENTION: "${OLLAMA_FLASH_ATTENTION:-1}"
+  OLLAMA_KV_CACHE_TYPE: "${OLLAMA_KV_CACHE_TYPE:-q8_0}"
+  # Server-wide default context (the jean-claude model also pins num_ctx in its Modelfile).
+  OLLAMA_CONTEXT_LENGTH: "${JC_NUM_CTX:-65536}"
+  # Loading ~22 GB from SSD into GPU/GTT memory can take a while on first run.
+  OLLAMA_LOAD_TIMEOUT: "${OLLAMA_LOAD_TIMEOUT:-15m}"
+  OLLAMA_DEBUG: "${OLLAMA_DEBUG:-0}"
+
+services:
+  ollama:
+    image: ollama/ollama:${OLLAMA_TAG:-latest}
+    container_name: jean-claude-ollama
+    restart: unless-stopped
+    environment:
+      <<: *ollama-env
+    volumes:
+      - ollama:/root/.ollama
+    ports:
+      # The Ollama API has no auth — keep it on localhost unless you need LAN access.
+      - "${OLLAMA_BIND:-127.0.0.1}:${OLLAMA_PORT:-11434}:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # One-shot job: pulls the Q5_K_M GGUF from Hugging Face and builds the
+  # `jean-claude` model (sampling params, context size, persona) on top of it.
+  model-init:
+    image: ollama/ollama:${OLLAMA_TAG:-latest}
+    container_name: jean-claude-model-init
+    restart: "no"
+    depends_on:
+      ollama:
+        condition: service_healthy
+        required: false
+    entrypoint: ["/bin/sh", "/jc/scripts/init-model.sh"]
+    environment:
+      OLLAMA_HOST: "${JC_OLLAMA_URL:-http://ollama:11434}"
+      JC_BASE_MODEL: "${JC_BASE_MODEL:-hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q5_K_M}"
+      JC_MODEL_NAME: "${JC_MODEL_NAME:-jean-claude}"
+      JC_NUM_CTX: "${JC_NUM_CTX:-65536}"
+      JC_NUM_THREAD: "${JC_NUM_THREAD:-}"
+      JC_NUM_GPU: "${JC_NUM_GPU:-}"
+      JC_UPDATE_BASE: "${JC_UPDATE_BASE:-0}"
+      JC_PRELOAD: "${JC_PRELOAD:-1}"
+    volumes:
+      - ./ollama:/jc/ollama:ro
+      - ./scripts:/jc/scripts:ro
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:${OPEN_WEBUI_TAG:-main}
+    container_name: jean-claude-webui
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+        required: false
+    environment:
+      WEBUI_NAME: "Jean Claude"
+      WEBUI_SECRET_KEY: "${WEBUI_SECRET_KEY:?Run ./scripts/setup.sh (or make setup) to generate .env}"
+      OLLAMA_BASE_URL: "${JC_OLLAMA_URL:-http://ollama:11434}"
+      DEFAULT_MODELS: "${JC_MODEL_NAME:-jean-claude}:latest"
+      # Fully local: no OpenAI-compatible endpoints, no telemetry.
+      ENABLE_OPENAI_API: "False"
+      ANONYMIZED_TELEMETRY: "False"
+      DO_NOT_TRACK: "True"
+      SCARF_NO_ANALYTICS: "True"
+      # Everything shares one 30B model; skip background jobs that would queue behind your chat.
+      ENABLE_AUTOCOMPLETE_GENERATION: "False"
+      ENABLE_EVALUATION_ARENA_MODELS: "False"
+      # First account created becomes admin. Set to False in .env after you sign up.
+      ENABLE_SIGNUP: "${WEBUI_ENABLE_SIGNUP:-True}"
+      # RAG embeddings run on CPU inside this container, leaving the iGPU to the LLM.
+      RAG_EMBEDDING_MODEL: "${RAG_EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}"
+    volumes:
+      - open-webui:/app/backend/data
+    ports:
+      - "${WEBUI_BIND:-0.0.0.0}:${WEBUI_PORT:-3000}:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+volumes:
+  ollama:
+    name: jean-claude-ollama
+  open-webui:
+    name: jean-claude-open-webui

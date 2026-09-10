@@ -1,0 +1,19 @@
+# ROCm/HIP backend for the Radeon 890M. The Ryzen AI 9 HX 370 (gfx1150) is on
+# Ollama's ROCm v7 support list, so no override should be needed.
+# Benchmark it against Vulkan with `make bench` — on some kernels/firmware the
+# iGPU is faster under Vulkan. Linux hosts only.
+services:
+  ollama:
+    image: ollama/ollama:${OLLAMA_ROCM_TAG:-rocm}
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-992}"
+    environment:
+      # Avoid the same iGPU being enumerated twice (ROCm + Vulkan).
+      OLLAMA_VULKAN: "0"
+      # Only if Ollama logs "no compatible GPUs" for gfx1150, uncomment one:
+      # HSA_OVERRIDE_GFX_VERSION: "11.5.0"
+      # HSA_OVERRIDE_GFX_VERSION: "11.0.0"

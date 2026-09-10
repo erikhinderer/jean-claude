@@ -1,0 +1,18 @@
+# Vulkan backend (Mesa RADV) for the Radeon 890M (gfx1150, RDNA 3.5).
+# Default on the SER9 Pro: RADV can use GTT (shared system RAM) beyond the
+# BIOS UMA carve-out, so the whole 21.7 GB model can live on the iGPU once the
+# TTM limit is raised (see scripts/host-tune-linux.sh). Linux hosts only.
+services:
+  ollama:
+    image: ollama/ollama:${OLLAMA_TAG:-latest}
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-992}"
+    # Lets Ollama read accurate GPU memory budgets through Vulkan.
+    cap_add:
+      - PERFMON
+    environment:
+      OLLAMA_VULKAN: "1"
+      GGML_VK_VISIBLE_DEVICES: "${GGML_VK_VISIBLE_DEVICES:-0}"

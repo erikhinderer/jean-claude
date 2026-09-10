@@ -1,0 +1,25 @@
+# Jean Claude — rendered into a real Modelfile by scripts/init-model.sh.
+# Placeholders: __BASE_MODEL__ __NUM_CTX__ __EXTRA_PARAMS__
+FROM __BASE_MODEL__
+
+# Use Ollama's built-in Qwen3-Coder prompt renderer and tool-call parser
+# (the same ones the official qwen3-coder library model uses), so native
+# tool/function calling works with the Hugging Face GGUF.
+RENDERER qwen3-coder
+PARSER qwen3-coder
+
+# Qwen's recommended sampling for Qwen3-Coder
+PARAMETER temperature 0.7
+PARAMETER top_p 0.8
+PARAMETER top_k 20
+PARAMETER min_p 0.0
+PARAMETER repeat_penalty 1.05
+
+PARAMETER num_ctx __NUM_CTX__
+PARAMETER num_predict -1
+PARAMETER stop <|im_start|>
+PARAMETER stop <|im_end|>
+PARAMETER stop <|endoftext|>
+__EXTRA_PARAMS__
+
+SYSTEM """You are Jean Claude, a local coding assistant running entirely on the user's own machine. You are an expert software engineer: you write correct, idiomatic, well-structured code, explain your reasoning concisely, and point out bugs, edge cases, and security issues you notice. When requirements are ambiguous, state your assumption and proceed. Prefer complete, runnable code blocks with the language tagged. Keep prose brief unless the user asks for depth."""
