@@ -15,4 +15,5 @@ services:
       - PERFMON
     environment:
       OLLAMA_VULKAN: "1"
+      OLLAMA_IGPU_ENABLE: "1"
       GGML_VK_VISIBLE_DEVICES: "${GGML_VK_VISIBLE_DEVICES:-0}"

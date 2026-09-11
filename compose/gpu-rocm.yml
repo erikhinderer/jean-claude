@@ -14,6 +14,7 @@ services:
     environment:
       # Avoid the same iGPU being enumerated twice (ROCm + Vulkan).
       OLLAMA_VULKAN: "0"
+      OLLAMA_IGPU_ENABLE: "1"
       # Only if Ollama logs "no compatible GPUs" for gfx1150, uncomment one:
       # HSA_OVERRIDE_GFX_VERSION: "11.5.0"
       # HSA_OVERRIDE_GFX_VERSION: "11.0.0"
