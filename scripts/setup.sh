@@ -29,11 +29,25 @@ fi
 if [ ! -f .env ]; then
   cp .env.example .env
   info "created .env from .env.example"
+else
+  # Upgrades: add settings that are new in .env.example, never touching existing values.
+  while IFS= read -r line; do
+    key="${line%%=*}"
+    if ! grep -qE "^${key}=" .env; then
+      printf '%s\n' "$line" >> .env; info "added new setting: $line"
+    fi
+  done < <(grep -E '^[A-Z_][A-Z0-9_]*=' .env.example)
 fi
 
 if [ -z "$(get_env WEBUI_SECRET_KEY)" ]; then
   set_env WEBUI_SECRET_KEY "$(random_hex 32)"
   info "generated WEBUI_SECRET_KEY"
+fi
+
+# The jean-claude-mini helper needs a second resident model slot.
+if [ -n "$(get_env JC_SMALL_BASE_MODEL)" ] && [ "$(get_env OLLAMA_MAX_LOADED_MODELS)" = "1" ]; then
+  warn "OLLAMA_MAX_LOADED_MODELS=1 but the jean-claude-mini helper is enabled: every switch between them would unload and reload the 22 GB model."
+  warn "Fix: sed -i 's/^OLLAMA_MAX_LOADED_MODELS=.*/OLLAMA_MAX_LOADED_MODELS=2/' .env   (or set JC_SMALL_BASE_MODEL= to disable the helper)"
 fi
 
 # ── host detection ─────────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ make setup          # writes .env: secret key, GPU group IDs, picks a backend
 sudo make tune      # Linux + GPU only, one time: lets the iGPU use ~46 GB of RAM. Reboot afterwards.
 make up             # starts Ollama + Open WebUI and pulls the 21.7 GB model
 make logs-init      # follow the download / model build
+make opencode       # optional: install the OpenCode coding agent (see below)
 ```
 
 Then open **http://localhost:3000** (or `http://<mini-pc-ip>:3000` from another machine). The first account you create becomes the admin. Once you've signed up, set `WEBUI_ENABLE_SIGNUP=False` in `.env` and run `make up` again.
@@ -170,7 +171,7 @@ A local 30B model on an integrated GPU has two limits that a cloud setup doesn't
 
 **Per project:** run **`/init`** once in each repository. OpenCode scans it and writes an `AGENTS.md` with its build, test and layout notes. Jean Claude then starts every session knowing the project instead of spending its slow prompt budget rediscovering it. Commit that file.
 
-**To change any of this:** edit `opencode/opencode.json.tmpl` or `opencode/AGENTS.md` and re-run `./scripts/install-opencode.sh --config`. To turn the helper model off, set `JC_SMALL_BASE_MODEL=` (empty) in `.env`, then run `make model` and `./scripts/install-opencode.sh --config`.
+**To change any of this:** edit `opencode/opencode.json.tmpl` or `opencode/AGENTS.md` and re-run `./scripts/install-opencode.sh --config`. To turn the helper model off, set `JC_SMALL_BASE_MODEL=` (empty) in `.env`, run `make model` and `./scripts/install-opencode.sh --config`, and set Open WebUI's Task Model to `jean-claude` (see *Upgrading an existing install*).
 
 ## Architecture
 
@@ -308,6 +309,30 @@ make publish                   # linux/amd64 + linux/arm64 → :latest and :YYYY
 ```
 
 `make image` builds it locally without pushing. `DOCKERHUB.md` is the text for the Docker Hub repository overview.
+
+## Upgrading an existing install
+
+New installs get every default automatically. On a machine that already runs Jean Claude, two kinds of setting **don't change on their own** when you pull a new version:
+
+- **`.env` values you already have.** `make setup` adds settings that are new in `.env.example`, but it never overwrites existing ones. It warns about known conflicts.
+- **Open WebUI settings.** Many environment variables are read only on Open WebUI's *first* start. After that, the value saved in its database (Admin Panel) wins.
+
+```bash
+git pull
+make setup                 # adds new .env settings, warns about outdated ones
+make up                    # recreates changed containers; model-init builds any new models
+make logs-init             # watch it finish (Ctrl-C at "done")
+make opencode              # re-installs the OpenCode config, rules, tools and slash commands
+```
+
+Then check the settings below. They matter if you installed before the change listed.
+
+| Setting | Where | Set it to | Why |
+|---|---|---|---|
+| `OLLAMA_MAX_LOADED_MODELS` | `.env` | `2` | Keeps the `jean-claude-mini` helper loaded next to `jean-claude`. With `1`, every switch between them unloads and reloads the 22 GB model. `make setup` warns if it's still `1`. |
+| **Task Model** | Open WebUI: **Admin Panel → Settings → Interface → Task Model** | `jean-claude-mini` | Chat titles, tags and follow-up suggestions run on the helper instead of interrupting `jean-claude`. New installs get this from `TASK_MODEL`. Existing installs keep their saved choice until you change it here. If you disable the helper (`JC_SMALL_BASE_MODEL=`), set this to `jean-claude`. |
+
+**Per repository (once):** open `opencode` in the repo and run `/init` to create its `AGENTS.md`, then try `/review` or `/bugsweep`. The first time Jean Claude edits a Python, Go or TypeScript file, OpenCode downloads the matching language server. That needs network access and takes a moment.
 
 ## Configuration reference (`.env`)
 
