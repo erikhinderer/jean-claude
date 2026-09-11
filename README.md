@@ -2,6 +2,8 @@
 
 A fully local coding chatbot: **Qwen3-Coder-30B-A3B-Instruct (Q5_K_M)** served by **Ollama**, with **Open WebUI** as the chat UI, all in Docker. Tuned for the **Beelink SER9 Pro** mini PC.
 
+<img width="1470" height="812" alt="image" src="https://github.com/user-attachments/assets/070add1f-2697-4064-b045-9754c3cafbdf" />
+
 | Target hardware | |
 |---|---|
 | CPU | AMD Ryzen AI 9 HX 370: 12 Zen 5 cores / 24 threads, up to 5.1 GHz |
