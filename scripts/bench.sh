@@ -4,6 +4,7 @@
 #   ./scripts/bench.sh --backends "vulkan cpu"  # compare backends back to back
 #   ./scripts/bench.sh --all                    # vulkan, rocm and cpu
 #   ./scripts/bench.sh --ctx 8000 --runs 5      # ~8K-token prompt (agent-sized), 5 runs
+#   ./scripts/bench.sh --batch "512 1024 2048"  # compare prompt batch sizes (num_batch)
 # Every run sends a *fresh* prompt (unique first line), so Ollama's prompt cache
 # can't inflate prompt-processing speed. Reports pp and generation tokens/s,
 # the actual prompt size processed, and the CPU/GPU split.
@@ -12,7 +13,7 @@ cd "$(dirname "$0")/.."
 # shellcheck source=scripts/lib.sh
 . scripts/lib.sh
 
-RUNS=3; BACKENDS=""; PREDICT=256; CTX=2000
+RUNS=3; BACKENDS=""; PREDICT=256; CTX=2000; BATCHES=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --all) BACKENDS="vulkan rocm cpu"; shift ;;
@@ -20,7 +21,8 @@ while [ $# -gt 0 ]; do
     --runs) RUNS="$2"; shift 2 ;;
     --tokens) PREDICT="$2"; shift 2 ;;
     --ctx) CTX="$2"; shift 2 ;;
-    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+    --batch) BATCHES="$2"; shift 2 ;;
+    -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -99,18 +101,29 @@ print(f"{pt:9.0f} {pp:8.1f} {tg:8.1f}")'
 }
 
 bench_backend() {
-  local b="$1" extra="{}" split
+  local b="$1" nb
   info "backend: $b"
   if [ "$b" != "current" ]; then
     COMPOSE_FILE="$(compose_file_for "$b")" docker compose up -d --force-recreate ollama >/dev/null
   fi
   wait_api
   curl -fsS "$API/show" -d "{\"model\":\"$MODEL\"}" >/dev/null || die "model $MODEL not found — run: make up (and wait for model-init)"
-  if [ "$b" = "cpu" ]; then extra="{\"num_gpu\":0,\"num_thread\":$CORES}"; fi
+  if [ -z "$BATCHES" ]; then
+    bench_one "$b" ""
+  else
+    for nb in $BATCHES; do bench_one "$b" "$nb"; done
+  fi
+}
 
-  info "  warm-up (loads the model — can take a minute)"
+bench_one() { # $1 = backend label, $2 = num_batch ("" = model default)
+  local b="$1" nb="$2" label="$1" extra split
+  [ -n "$nb" ] && label="$b/b$nb"
+  extra="$(python3 -c 'import json,sys; o={}; c,t,nb=sys.argv[1:]; o.update({"num_gpu":0,"num_thread":int(t)} if c=="cpu" else {}); o.update({"num_batch":int(nb)} if nb else {}); print(json.dumps(o))' "$b" "$CORES" "$nb")"
+  b="$label"
+
+  info "  ${label}: warm-up (loads the model — can take a minute)"
   if ! run_one "$extra" >/dev/null; then
-    warn "  $b: request failed (see: make logs)"; printf '%-8s FAILED\n' "$b" >> "$RESULTS"; return
+    warn "  $b: request failed (see: make logs)"; printf '%-14s FAILED\n' "$b" >> "$RESULTS"; return
   fi
 
   local tmp; tmp="$(mktemp)"
@@ -119,7 +132,7 @@ bench_backend() {
     printf '    run %s/%s done\n' "$i" "$RUNS"
   done
   split="$(docker compose exec -T ollama ollama ps 2>/dev/null | awk 'NR==2{for(i=1;i<=NF;i++) if($i ~ /%/) {print $i" "$(i+1); exit}}' || true)"
-  printf '%-8s %s   %s\n' "$b" "$(summarize < "$tmp")" "${split:-?}" >> "$RESULTS"
+  printf '%-14s %s   %s\n' "$b" "$(summarize < "$tmp")" "${split:-?}" >> "$RESULTS"
   rm -f "$tmp"
 }
 
@@ -135,7 +148,7 @@ fi
 
 echo
 bold "Jean Claude benchmark — $MODEL, ~${CTX}-token prompt, ${PREDICT} generated tokens, ${RUNS} runs"; echo
-printf '%-8s %9s %8s %8s   %s\n' backend "pp tokens" "pp t/s" "gen t/s" "processor"
+printf '%-14s %9s %8s %8s   %s\n' backend "pp tokens" "pp t/s" "gen t/s" "processor"
 cat "$RESULTS"
 echo
 echo "pp = prompt processing (reading input: files, agent instructions), gen = generation (writing)."

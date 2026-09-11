@@ -35,6 +35,8 @@ if [ -n "${JC_NUM_THREAD:-}" ]; then EXTRA="${EXTRA}PARAMETER num_thread ${JC_NU
 "; fi
 if [ -n "${JC_NUM_GPU:-}" ]; then EXTRA="${EXTRA}PARAMETER num_gpu ${JC_NUM_GPU}
 "; fi
+if [ -n "${JC_NUM_BATCH:-}" ]; then EXTRA="${EXTRA}PARAMETER num_batch ${JC_NUM_BATCH}
+"; fi
 
 awk -v base="$BASE" -v ctx="$CTX" -v extra="$EXTRA" '
   /^# Placeholders:/ { next }
@@ -43,7 +45,7 @@ awk -v base="$BASE" -v ctx="$CTX" -v extra="$EXTRA" '
   { print }
 ' "$TMPL" > "$OUT"
 
-log "creating ${NAME} (num_ctx=${CTX}${JC_NUM_THREAD:+, num_thread=$JC_NUM_THREAD}${JC_NUM_GPU:+, num_gpu=$JC_NUM_GPU})"
+log "creating ${NAME} (num_ctx=${CTX}${JC_NUM_THREAD:+, num_thread=$JC_NUM_THREAD}${JC_NUM_GPU:+, num_gpu=$JC_NUM_GPU}${JC_NUM_BATCH:+, num_batch=$JC_NUM_BATCH})"
 ollama create "$NAME" -f "$OUT"
 
 if [ "${JC_PRELOAD:-1}" = "1" ]; then

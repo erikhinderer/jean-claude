@@ -18,7 +18,7 @@ JC_NEED_GB=28
 
 get_env() {
   [ -f "$ENV_FILE" ] || return 0
-  grep -E "^$1=" "$ENV_FILE" | tail -n1 | cut -d= -f2-
+  { grep -E "^$1=" "$ENV_FILE" || true; } | tail -n1 | cut -d= -f2-
 }
 
 # set_env KEY VALUE — replace or append, portable across GNU/BSD

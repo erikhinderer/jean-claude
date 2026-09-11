@@ -11,6 +11,7 @@ services:
       JC_NUM_CTX: "${JC_NUM_CTX:-65536}"
       JC_NUM_THREAD: "${JC_NUM_THREAD:-}"
       JC_NUM_GPU: "${JC_NUM_GPU:-}"
+      JC_NUM_BATCH: "${JC_NUM_BATCH:-}"
       JC_UPDATE_BASE: "${JC_UPDATE_BASE:-0}"
       JC_PRELOAD: "${JC_PRELOAD:-1}"
   model-init:

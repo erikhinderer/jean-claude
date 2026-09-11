@@ -38,11 +38,13 @@ docker exec -it jean-claude ollama run jean-claude
 | `JC_BASE_MODEL` | Unsloth Q5_K_M | Any `hf.co/…:<quant>` or Ollama library tag. |
 | `JC_NUM_THREAD` | *(auto)* | Set to the physical core count for CPU-only use. |
 | `JC_NUM_GPU` | *(auto)* | `999` forces every layer onto the GPU. |
+| `JC_NUM_BATCH` | *(512)* | Prompt batch size; 1024–2048 can speed up prompt processing on iGPUs. |
 | `JC_PRELOAD` | `1` | Load the model into memory right after it's built. |
 | `JC_UPDATE_BASE` | `0` | `1` re-pulls the weights on start. |
 | `JC_SKIP_INIT` | `0` | `1` runs the image as plain Ollama. |
 | `OLLAMA_KV_CACHE_TYPE` | `q8_0` | `f16` or `q4_0`. |
 | `OLLAMA_VULKAN` | `1` | Set to `0` to disable the Vulkan GPU backend. |
+| `OLLAMA_IGPU_ENABLE` | `1` | Required for integrated Radeon GPUs; Ollama skips them otherwise. |
 
 ## Tags
 
