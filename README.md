@@ -126,6 +126,12 @@ OpenAI-compatible clients (Continue, Aider, Cline, and similar): base URL `http:
 
 The Ollama half of the stack is also published as a single image. It is `ollama/ollama` with the Jean Claude Modelfile, tuning and entrypoint baked in (~3.7 GB). The 21.7 GB weights are **not** in the image. On first start the container pulls them into `/root/.ollama` and builds `jean-claude`; after that, starts are instant.
 
+Pull it:
+
+```bash
+docker pull erikhinderer/jean-claude:latest
+```
+
 Run it on its own (Linux + Radeon via Vulkan; drop `--device` for CPU-only):
 
 ```bash
