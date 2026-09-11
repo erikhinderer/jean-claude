@@ -1,0 +1,47 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "jean-claude": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Jean Claude (local Ollama)",
+      "options": { "baseURL": "__OLLAMA_URL__/v1" },
+      "models": {
+        "__MODEL__": {
+          "name": "Jean Claude — Qwen3-Coder-30B-A3B Q5_K_M",
+          "limit": { "context": __NUM_CTX__, "output": 8192 }
+        }
+      }
+    }
+  },
+  "model": "jean-claude/__MODEL__",
+  "small_model": "jean-claude/__MODEL__",
+  "share": "disabled",
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "external_directory": "ask",
+    "webfetch": "ask",
+    "bash": {
+      "*": "ask",
+      "ls*": "allow",
+      "pwd": "allow",
+      "cat *": "allow",
+      "head *": "allow",
+      "tail *": "allow",
+      "wc *": "allow",
+      "grep *": "allow",
+      "rg *": "allow",
+      "find *": "allow",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git show*": "allow",
+      "git branch*": "allow",
+      "git push*": "deny",
+      "rm -rf *": "deny",
+      "sudo *": "deny"
+    }
+  }
+}

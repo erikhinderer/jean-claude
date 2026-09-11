@@ -54,8 +54,44 @@ Other prompts that work well: *"Explain how data generation flows from the CLI t
 
 - **The model sees search results, not the whole repo.** Retrieval sends it the chunks most relevant to your question, so specific questions ("how are bucket credentials handled?") get better answers than "check everything". For a whole-file review, attach individual files with **+** in the chat box instead.
 - **Small repos can be sent in full.** If a repo fits comfortably in the 64K-token context, turn on full-context mode in **Admin Panel → Settings → Documents** (*Bypass Embedding and Retrieval*). The model then gets complete files instead of excerpts.
-- **It's read-only.** Jean Claude can find bugs and propose fixes here, but it can't edit files or run your tests. To apply fixes and run tests across a repo, use a coding agent on the machine that holds the code, such as [OpenCode](https://opencode.ai) with `http://localhost:11434/v1` as an OpenAI-compatible provider and model `jean-claude`.
+- **The chat UI is read-only.** Here Jean Claude can find bugs and propose fixes, but it can't edit files or run your tests. To have it make the changes and run the tests itself, use OpenCode (next section).
 - **Don't upload secrets.** Check the exported folder for credentials, keys or `.env` files before uploading. Anything in a knowledge base is visible to users you share it with.
+
+## Coding agent: OpenCode (reads and writes your files)
+
+The chat UI can't touch your files, but Jean Claude can work directly on a repository through [OpenCode](https://opencode.ai), an open-source terminal coding agent. OpenCode runs on the host, in your project folder. It gives Jean Claude tools to list, read, search and **edit files** and to run shell commands, and it executes what the model asks for. The model still runs locally in Ollama, so no code leaves the machine.
+
+**Install it (once per machine):**
+
+```bash
+make opencode        # installs the OpenCode CLI and writes ~/.config/opencode/{opencode.json,AGENTS.md}
+```
+
+This points OpenCode at the local Ollama API (`http://127.0.0.1:11434/v1`, model `jean-claude`, 64K context) for both its main and background tasks, so nothing goes to a cloud model. Any existing `opencode.json` is backed up first. Run `./scripts/install-opencode.sh --config` to rewrite only the config, for example after changing `JC_NUM_CTX`.
+
+**Use it:**
+
+```bash
+cd ~/github-erikhinderer/couchbase-data-generator
+git switch -c jean-claude/review      # work on a branch so every change is easy to review or discard
+opencode
+```
+
+Then ask in plain language. For example: *"Review this repository for bugs, run the tests, and fix anything that's broken. Explain each change before you make it."* When it's done, review the work with `git diff` and commit what you want to keep.
+
+**Default permissions** (from `opencode/opencode.json.tmpl`):
+
+| Action | Default |
+|---|---|
+| Read, search and **edit files** in the project | **allow**: no prompts |
+| Read-only shell commands (`ls`, `cat`, `grep`, `find`, `git status/diff/log/show`) | allow |
+| Any other shell command (tests, installs, builds) and web fetches | ask |
+| Files outside the project folder | ask |
+| `git push`, `rm -rf`, `sudo` | deny |
+
+`opencode/AGENTS.md` holds Jean Claude's working rules: read the project first, make small focused changes, run the tests, suggest a branch, never touch secrets or push. To change permissions for everyone, edit the template and re-run `make opencode`. To change them for one project, add an `opencode.json` to that project's root. OpenCode merges project settings over the global config.
+
+**Speed:** OpenCode sends a large instruction prompt (~7K tokens) with the first request. On the Radeon 860M that takes roughly 40 seconds, and later steps are much faster because Ollama reuses the processed prompt. Keep `jean-claude` on the GPU (`make ps` should show `100% GPU`).
 
 ## Architecture
 
@@ -78,7 +114,8 @@ Other prompts that work well: *"Explain how data generation flows from the CLI t
 | `ollama/Modelfile.tmpl` | The Jean Claude model: sampling settings, context size, tool-call parser, persona. |
 | `compose/hub-image.yml` | Uses the published `erikhinderer/jean-claude` image for Ollama. |
 | `Dockerfile`, `docker/` | The `erikhinderer/jean-claude` image. |
-| `scripts/` | `setup`, `host-tune-linux`, `init-model`, `bench`, `doctor`, `publish-image`. |
+| `opencode/` | OpenCode config template and Jean Claude's agent rules (`make opencode`). |
+| `scripts/` | `setup`, `host-tune-linux`, `init-model`, `bench`, `doctor`, `publish-image`, `install-opencode`. |
 
 The backend is chosen by `COMPOSE_FILE` in `.env`. To switch, run `make backend B=vulkan|rocm|cpu|native` and then `make up`.
 

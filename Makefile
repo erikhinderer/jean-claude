@@ -56,6 +56,9 @@ bench: ## Benchmark current backend
 bench-all: ## Benchmark vulkan, rocm and cpu back to back
 	@./scripts/bench.sh --all
 
+opencode: ## Install OpenCode on this host, wired to Jean Claude (reads/writes files)
+	@./scripts/install-opencode.sh
+
 image: ## Build the erikhinderer/jean-claude image locally
 	@./scripts/publish-image.sh --local
 
@@ -65,4 +68,4 @@ publish: ## Build + push erikhinderer/jean-claude to Docker Hub (docker login fi
 clean: ## Remove containers AND volumes (deletes model + chats)
 	@read -p "Delete model (~22 GB) and all chats? [y/N] " a && [ "$$a" = y ] && docker compose down -v || echo aborted
 
-.PHONY: help setup backend tune up down restart model update logs logs-init ps chat doctor bench bench-all image publish clean
+.PHONY: help setup backend tune up down restart model update logs logs-init ps chat doctor bench bench-all opencode image publish clean
