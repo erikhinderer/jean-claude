@@ -1,6 +1,6 @@
 # Jean Claude
 
-A fully local coding chatbot: **Qwen3-Coder-30B-A3B-Instruct (Q5_K_M)** served by **Ollama**, with **Open WebUI** as the chat UI, all in Docker. Tuned for the **Beelink SER9 Pro** mini PC.
+A fully local coding chatbot: **Qwen3-Coder-30B-A3B-Instruct (Q5_K_M)** served by **Ollama**, with **Open WebUI** as the chat UI, all in Docker.
 
 <img width="1470" height="812" alt="image" src="https://github.com/user-attachments/assets/070add1f-2697-4064-b045-9754c3cafbdf" />
 
