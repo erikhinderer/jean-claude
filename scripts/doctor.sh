@@ -14,12 +14,15 @@ docker compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}' 2>/dev/
 
 if [ "$(uname -s)" = "Linux" ]; then
   echo; bold "Host"; echo
+  echo "  CPU:           $(lscpu 2>/dev/null | awk -F: '/Model name/ {gsub(/^ +/,"",$2); print $2; exit}') ($(nproc) threads)"
   echo "  kernel:        $(uname -r)"
   echo "  RAM total:     $(( $(awk '/MemTotal/ {print $2}' /proc/meminfo) / 1024 / 1024 )) GB"
   echo "  ttm limit:     $(( $(cat /sys/module/ttm/parameters/pages_limit 2>/dev/null || echo 0) / 262144 )) GB (pages_limit)"
   v="$(gpu_vram_gb || true)"; g="$(gpu_gtt_gb || true)"
   echo "  iGPU UMA/VRAM: ${v:-?} GB   iGPU GTT: ${g:-?} GB"
-  if [ -n "$g" ] && [ "$g" -lt 32 ]; then warn "GTT < 32 GB: model will spill to CPU. Run sudo ./scripts/host-tune-linux.sh"; fi
+  if { [ -z "$v" ] || [ "$v" -lt "$JC_NEED_GB" ]; } && [ -n "$g" ] && [ "$g" -lt "$JC_NEED_GB" ]; then
+    warn "neither carve-out nor GTT fits ~${JC_NEED_GB} GB: model will spill to CPU. Raise BIOS UMA to 32 GB or run sudo ./scripts/host-tune-linux.sh"
+  fi
   command -v powerprofilesctl >/dev/null && echo "  power profile: $(powerprofilesctl get 2>/dev/null)"
   [ -e /dev/kfd ] && echo "  /dev/kfd:      present (ROCm possible)" || echo "  /dev/kfd:      missing"
 fi

@@ -85,6 +85,8 @@ The 890M has no VRAM of its own. It gets a small BIOS carve-out ("UMA frame buff
 
 `scripts/host-tune-linux.sh` sets `ttm.pages_limit` on the kernel command line (RAM minus 16 GB, which is ~46 GB on this box), adds you to the `render`/`video` groups, and switches to the `performance` power profile. After you reboot, `make doctor` should report GTT at ~46 GB and `ollama ps` should show **100% GPU**.
 
+**If your BIOS already reserves 32 GB** (*UMA Frame Buffer Size* = 32G), the model and its KV cache (~28 GB) fit entirely in that dedicated carve-out, and no kernel tuning is needed. `make setup` and `host-tune-linux.sh` detect this and leave the kernel command line alone. The trade-off is that Linux only sees the remaining ~30 GB, which is still plenty for the OS and Open WebUI.
+
 **BIOS:** with the Vulkan backend, leave *UMA Frame Buffer Size* small or on Auto, because RADV uses GTT. If you use ROCm and Ollama detects only a few GB of GPU memory, raise the UMA frame buffer to the maximum your BIOS offers. Ollama will then split layers between GPU and CPU.
 
 ### Choosing a backend

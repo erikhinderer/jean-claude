@@ -14,12 +14,13 @@ cd "$(dirname "$0")/.."
 # shellcheck source=scripts/lib.sh
 . scripts/lib.sh
 
-DRY=0; YES=0; GB=""
+DRY=0; YES=0; FORCE=0; GB=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --gb) GB="$2"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     -y|--yes) YES=1; shift ;;
+    --force) FORCE=1; shift ;;
     -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
@@ -41,12 +42,24 @@ g="$(gpu_gtt_gb || true)";  [ -n "$g" ] && info "current GTT total: ${g} GB"
 v="$(gpu_vram_gb || true)"; [ -n "$v" ] && info "current BIOS UMA carve-out: ${v} GB"
 
 # ── 1. kernel command line (GRUB) ──────────────────────────────────────────
+SKIP_GRUB=0
+if [ "$FORCE" = 0 ] && [ -n "$v" ] && [ "$v" -ge "$JC_NEED_GB" ]; then
+  info "the BIOS carve-out (${v} GB) already fits Jean Claude (~${JC_NEED_GB} GB) — leaving the kernel command line alone"
+  info "(to shrink the carve-out and use GTT instead, lower UMA Frame Buffer in BIOS, then re-run with --force)"
+  SKIP_GRUB=1
+elif [ "$FORCE" = 0 ] && [ "$cur_pages" != "?" ] && [ "$cur_pages" -ge "$PAGES" ]; then
+  info "current ttm.pages_limit already >= target — leaving the kernel command line alone"
+  SKIP_GRUB=1
+fi
+
 GRUB=/etc/default/grub
-if [ -f "$GRUB" ]; then
+if [ "$SKIP_GRUB" = 1 ]; then
+  :
+elif [ -f "$GRUB" ]; then
   line="$(grep -E '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB" | head -n1)"
   val="${line#GRUB_CMDLINE_LINUX_DEFAULT=}"; val="${val%\"}"; val="${val#\"}"
   # drop any previous ttm/gttsize settings, then append ours
-  new="$(printf '%s' "$val" | tr ' ' '\n' | grep -vE '^(ttm\.pages_limit|ttm\.page_pool_size|amdgpu\.gttsize)=' | tr '\n' ' ' | sed 's/ *$//')"
+  new="$(printf '%s' "$val" | tr ' ' '\n' | { grep -vE '^(ttm\.pages_limit|ttm\.page_pool_size|amdgpu\.gttsize)=' || true; } | tr '\n' ' ' | sed 's/ *$//')"
   new="${new:+$new }ttm.pages_limit=${PAGES}"
   info "GRUB_CMDLINE_LINUX_DEFAULT:"
   echo "    old: \"$val\""
@@ -86,7 +99,7 @@ fi
 
 cat <<EOF
 
-$(bold "Next:") reboot, then verify with  make doctor  (GTT total should read ~${GB} GB).
+$(bold "Next:") reboot if anything above changed, then verify with  make doctor
 
 BIOS (optional; the menu location varies by BIOS version — look under Advanced /
 AMD CBS / NBIO / GFX Configuration):

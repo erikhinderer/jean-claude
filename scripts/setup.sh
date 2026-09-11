@@ -89,12 +89,12 @@ if [ "$OS" = "Linux" ] && [ "$IS_WSL" = 0 ]; then
     gtt_gb="$(gpu_gtt_gb || true)"
     vram_gb="$(gpu_vram_gb || true)"
     [ -n "$vram_gb" ] && info "iGPU UMA carve-out (BIOS): ${vram_gb} GB"
-    if [ -n "$gtt_gb" ]; then
-      info "iGPU GTT (shared) limit: ${gtt_gb} GB"
-      if [ "$gtt_gb" -lt 32 ]; then
-        warn "GTT limit is below the ~27 GB Jean Claude needs (21.7 GB weights + KV cache)."
-        warn "Run: sudo ./scripts/host-tune-linux.sh   (raises the TTM limit, then reboot)"
-      fi
+    [ -n "$gtt_gb" ] && info "iGPU GTT (shared) limit: ${gtt_gb} GB"
+    if [ -n "$vram_gb" ] && [ "$vram_gb" -ge "$JC_NEED_GB" ]; then
+      info "the ${vram_gb} GB carve-out holds the whole model + KV cache (~${JC_NEED_GB} GB) — no host tuning needed"
+    elif [ -n "$gtt_gb" ] && [ "$gtt_gb" -lt "$JC_NEED_GB" ]; then
+      warn "neither the ${vram_gb:-?} GB carve-out nor the ${gtt_gb} GB GTT limit fits the ~${JC_NEED_GB} GB Jean Claude needs."
+      warn "Either raise the BIOS UMA Frame Buffer to 32 GB, or run: sudo ./scripts/host-tune-linux.sh"
     fi
   fi
 fi

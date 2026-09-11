@@ -13,6 +13,9 @@ version_ge() {
 
 ENV_FILE="${ENV_FILE:-.env}"
 
+# GPU memory Jean Claude needs: 21.7 GB weights + ~3.2 GB KV (64K, q8_0) + buffers
+JC_NEED_GB=28
+
 get_env() {
   [ -f "$ENV_FILE" ] || return 0
   grep -E "^$1=" "$ENV_FILE" | tail -n1 | cut -d= -f2-
