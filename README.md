@@ -44,7 +44,9 @@ Then open **http://localhost:3000** (or `http://<mini-pc-ip>:3000` from another 
 | `compose/gpu-rocm.yml` | Radeon 890M through ROCm/HIP (`ollama/ollama:rocm`). |
 | `compose/native-ollama.yml` | Uses an Ollama installed on the host (for Windows or macOS). |
 | `ollama/Modelfile.tmpl` | The Jean Claude model: sampling settings, context size, tool-call parser, persona. |
-| `scripts/` | `setup`, `host-tune-linux`, `init-model`, `bench`, `doctor`. |
+| `compose/hub-image.yml` | Uses the published `erikhinderer/jean-claude` image for Ollama. |
+| `Dockerfile`, `docker/` | The `erikhinderer/jean-claude` image. |
+| `scripts/` | `setup`, `host-tune-linux`, `init-model`, `bench`, `doctor`, `publish-image`. |
 
 The backend is chosen by `COMPOSE_FILE` in `.env`. To switch, run `make backend B=vulkan|rocm|cpu|native` and then `make up`.
 
@@ -119,6 +121,37 @@ curl http://127.0.0.1:11434/api/chat -d '{"model":"jean-claude","messages":[{"ro
 ```
 
 OpenAI-compatible clients (Continue, Aider, Cline, and similar): base URL `http://<host>:11434/v1`, model `jean-claude`.
+
+## Docker Hub image: `erikhinderer/jean-claude`
+
+The Ollama half of the stack is also published as a single image. It is `ollama/ollama` with the Jean Claude Modelfile, tuning and entrypoint baked in (~3.7 GB). The 21.7 GB weights are **not** in the image. On first start the container pulls them into `/root/.ollama` and builds `jean-claude`; after that, starts are instant.
+
+Run it on its own (Linux + Radeon via Vulkan; drop `--device` for CPU-only):
+
+```bash
+docker run -d --name jean-claude --restart unless-stopped \
+  --device /dev/dri --group-add video --group-add render \
+  -v jean-claude:/root/.ollama -p 127.0.0.1:11434:11434 \
+  erikhinderer/jean-claude:latest
+docker logs -f jean-claude      # watch the first-run download
+```
+
+Or use it inside this stack in place of stock Ollama + `model-init`. Set this in `.env` (it must come last):
+
+```
+COMPOSE_FILE=docker-compose.yml:compose/gpu-vulkan.yml:compose/hub-image.yml
+```
+
+Every setting is an environment variable (`JC_NUM_CTX`, `JC_BASE_MODEL`, `OLLAMA_KV_CACHE_TYPE`, …). Set `JC_SKIP_INIT=1` to run it as plain Ollama.
+
+Publishing (maintainer):
+
+```bash
+docker login -u erikhinderer   # use a Docker Hub access token as the password
+make publish                   # linux/amd64 + linux/arm64 → :latest and :YYYY.MM.DD
+```
+
+`make image` builds it locally without pushing. `DOCKERHUB.md` is the text for the Docker Hub repository overview.
 
 ## Configuration reference (`.env`)
 

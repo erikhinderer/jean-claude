@@ -1,0 +1,17 @@
+# Run Ollama from the published Jean Claude image instead of stock ollama/ollama.
+# The image builds the model itself, so the separate model-init job is disabled.
+# Add it LAST in COMPOSE_FILE, e.g.:
+#   COMPOSE_FILE=docker-compose.yml:compose/gpu-vulkan.yml:compose/hub-image.yml
+services:
+  ollama:
+    image: ${JC_IMAGE:-erikhinderer/jean-claude:latest}
+    environment:
+      JC_BASE_MODEL: "${JC_BASE_MODEL:-hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q5_K_M}"
+      JC_MODEL_NAME: "${JC_MODEL_NAME:-jean-claude}"
+      JC_NUM_CTX: "${JC_NUM_CTX:-65536}"
+      JC_NUM_THREAD: "${JC_NUM_THREAD:-}"
+      JC_NUM_GPU: "${JC_NUM_GPU:-}"
+      JC_UPDATE_BASE: "${JC_UPDATE_BASE:-0}"
+      JC_PRELOAD: "${JC_PRELOAD:-1}"
+  model-init:
+    profiles: ["disabled"]
