@@ -25,6 +25,38 @@ Then open **http://localhost:3000** (or `http://<mini-pc-ip>:3000` from another 
 
 `make doctor` shows whether the model landed on the GPU. `make bench-all` measures every backend on your machine.
 
+## Working with local code bases (Workspace → Knowledge)
+
+Jean Claude can't read files on your computer by itself. Open WebUI runs in its own container, and the model only sees what you send it. To have it review a whole code base in the chat UI, load the code into a **knowledge base**. Open WebUI indexes the files, and the model searches them with its built-in knowledge tools (`search_knowledge_files`, `query_knowledge_files`).
+
+**1. Make a clean copy of the repository** on the machine running your browser, because uploads go through the browser. `git archive` exports only tracked files, so `.git`, `node_modules`, virtualenvs, build output and git-ignored secrets such as `.env` stay out:
+
+```bash
+mkdir -p ~/kb/couchbase-data-generator
+git -C ~/github-erikhinderer/couchbase-data-generator archive HEAD | tar -x -C ~/kb/couchbase-data-generator
+```
+
+**2. Create the knowledge base.** Go to **Workspace → Knowledge → +**, give it a name (for example `couchbase-data-generator`) and a short description, then **Create**.
+
+**3. Upload the code.** Open the knowledge base, click **+**, choose **Upload directory** and select the folder from step 1. Wait until every file shows as processed. Indexing runs on the CPU and can take a few minutes for a large repo.
+
+**4. Use it in a chat.** In a new chat with `jean-claude`, type `#` in the message box, pick the knowledge base, then ask. For example:
+
+> Review this codebase for bugs, most serious first. For each one give the file, the line, what goes wrong and a suggested fix.
+
+Other prompts that work well: *"Explain how data generation flows from the CLI to Couchbase"*, *"Which functions have no error handling around network calls?"*, *"Write unit tests for `<file>`"*.
+
+**5. Optional: make a dedicated assistant.** Go to **Workspace → Models → +**, choose `jean-claude` as the base model, and attach the knowledge base under **Knowledge**. Give it a name like *Couchbase Data Generator Reviewer*. Every chat with that model then has the code available automatically.
+
+**Keep it current.** A knowledge base is a snapshot. After significant changes, re-export (step 1), then delete the old files in the knowledge base and upload the new folder, or delete and recreate the knowledge base.
+
+**What to expect:**
+
+- **The model sees search results, not the whole repo.** Retrieval sends it the chunks most relevant to your question, so specific questions ("how are bucket credentials handled?") get better answers than "check everything". For a whole-file review, attach individual files with **+** in the chat box instead.
+- **Small repos can be sent in full.** If a repo fits comfortably in the 64K-token context, turn on full-context mode in **Admin Panel → Settings → Documents** (*Bypass Embedding and Retrieval*). The model then gets complete files instead of excerpts.
+- **It's read-only.** Jean Claude can find bugs and propose fixes here, but it can't edit files or run your tests. To apply fixes and run tests across a repo, use a coding agent on the machine that holds the code, such as [OpenCode](https://opencode.ai) with `http://localhost:11434/v1` as an OpenAI-compatible provider and model `jean-claude`.
+- **Don't upload secrets.** Check the exported folder for credentials, keys or `.env` files before uploading. Anything in a knowledge base is visible to users you share it with.
+
 ## Architecture
 
 ```
