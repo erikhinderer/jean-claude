@@ -5,9 +5,13 @@
 # Then:  opencode ~/path/to/your/repo
 #
 # Writes ~/.config/opencode/opencode.json (backing up any existing file) and
-# ~/.config/opencode/AGENTS.md (Jean Claude's working rules). Permissions:
+# ~/.config/opencode/AGENTS.md (Jean Claude's working rules), and the sandbox test tools
+# (~/.config/opencode/tools/, ~/.local/bin/jc-sandbox). Permissions:
 #   read / edit / search files ....... allow  (no prompts)
 #   read-only shell (ls, cat, git diff) allow
+#   run_tests_sandboxed ............. allow  (sandboxed, no network)
+#   sandbox_setup (installs deps) .... ask
+#   test commands in the shell ....... deny   (use the sandbox)
 #   other shell commands, web fetch .. ask
 #   git push, rm -rf, sudo ........... deny
 set -euo pipefail
@@ -52,7 +56,27 @@ for pair in "$new:opencode.json" "opencode/AGENTS.md:AGENTS.md"; do
 done
 rm -f "$new"
 
-# ── 3. check Jean Claude is reachable ──────────────────────────────────────
+# ── 3. sandbox test tools (WASM + container) ───────────────────────────────
+REPO="$(pwd)"
+BIN_DIR="$HOME/.local/bin"; mkdir -p "$BIN_DIR" "$CFG_DIR/tools"
+ln -sf "$REPO/sandbox/jc-sandbox" "$BIN_DIR/jc-sandbox"
+info "linked $BIN_DIR/jc-sandbox -> $REPO/sandbox/jc-sandbox"
+for t in opencode/tools/*.ts; do
+  sed "s|__JC_SANDBOX__|$BIN_DIR/jc-sandbox|g" "$t" > "$CFG_DIR/tools/$(basename "$t")"
+  info "installed tool $(basename "$t" .ts)"
+done
+# OpenCode installs dependencies listed in the config dir's package.json at startup;
+# the tools need @opencode-ai/plugin (merged, not overwritten).
+python3 - "$CFG_DIR/package.json" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+d = json.load(open(p)) if os.path.exists(p) else {}
+d.setdefault("dependencies", {}).setdefault("@opencode-ai/plugin", "latest")
+json.dump(d, open(p, "w"), indent=2); open(p, "a").write("\n")
+PY
+command -v docker >/dev/null || warn "docker not found: run_tests_sandboxed needs Docker on this host"
+
+# ── 4. check Jean Claude is reachable ──────────────────────────────────────
 if curl -fsS "$URL/api/show" -d "{\"model\":\"$MODEL\"}" >/dev/null 2>&1; then
   info "Jean Claude is up at $URL (model: $MODEL)"
 else
@@ -66,7 +90,9 @@ $(bold "OpenCode is set up to use Jean Claude.")
   cd ~/path/to/your/repo && git switch -c jean-claude/review   # recommended: work on a branch
   opencode                                                    # or: opencode ~/path/to/your/repo
 
-It can read and edit files in that folder without asking; other shell commands
-(tests, installs) prompt for approval. Review its changes with: git diff
+It can read and edit files in that folder without asking. It runs tests only in the
+sandbox (run_tests_sandboxed: no network, only the project folder visible); installing
+test dependencies (sandbox_setup) asks first. Other shell commands prompt for approval.
+Review its changes with: git diff
 If 'opencode' isn't found, open a new shell or run: export PATH="\$HOME/.opencode/bin:\$PATH"
 EOF

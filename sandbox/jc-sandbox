@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+# jc-sandbox — run a project's tests in a sandbox: WebAssembly (Wasmtime) where the
+# language supports it, otherwise a locked-down throwaway Docker container.
+#
+#   jc-sandbox test  [options] [-- custom test command]   # no network, ever
+#   jc-sandbox setup [options]                            # install deps (network on)
+#   jc-sandbox info  [options]                            # show detected plan
+#
+# Options:
+#   --dir PATH            project root (default: current directory)
+#   --backend B           auto | wasm | container   (default: auto)
+#   --timeout SECONDS     wall-clock limit (default: $JC_SBX_TIMEOUT or 900)
+#   --network NAME        test phase only: attach to this Docker network instead of none
+#                         (e.g. one running a throwaway database for integration tests)
+#
+# Languages: rust (Cargo.toml), go (go.mod), node (package.json), python
+# (pyproject.toml / setup.py / setup.cfg / requirements*.txt / pytest.ini / tox.ini).
+# auto = wasm for rust and go; container for node and python. Python can be forced
+# into WASM with --backend wasm (pure-Python projects only).
+#
+# Isolation (both backends run inside a container):
+#   no network (test) · read-only root · non-root user · all capabilities dropped ·
+#   no-new-privileges · pids/memory/CPU limits · only the project folder is mounted
+#   (read-write, at /work) plus a per-project dependency cache at /deps
+#   (~/.cache/jean-claude-sandbox/<project>; delete it any time to start fresh).
+# WASM adds a second boundary: the test code runs inside Wasmtime, which only sees
+# explicitly pre-opened directories and has no sockets.
+set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+MODE="${1:-}"; [ $# -gt 0 ] && shift
+DIR="$PWD"; BACKEND="auto"; TIMEOUT="${JC_SBX_TIMEOUT:-900}"; NET=""; CUSTOM=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dir) DIR="$2"; shift 2 ;;
+    --backend) BACKEND="$2"; shift 2 ;;
+    --timeout) TIMEOUT="$2"; shift 2 ;;
+    --network) NET="$2"; shift 2 ;;
+    --) shift; CUSTOM="$*"; break ;;
+    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    *) echo "jc-sandbox: unknown option $1" >&2; exit 2 ;;
+  esac
+done
+case "$MODE" in test|setup|info) ;; *) sed -n '2,26p' "$0"; exit 2 ;; esac
+command -v docker >/dev/null || { echo "jc-sandbox: docker not found" >&2; exit 2; }
+DIR="$(cd "$DIR" 2>/dev/null && pwd)" || { echo "jc-sandbox: no such directory" >&2; exit 2; }
+
+NCPU="$(nproc 2>/dev/null || echo 2)"
+MEM="${JC_SBX_MEMORY:-4g}"; CPUS="${JC_SBX_CPUS:-$(( NCPU < 4 ? NCPU : 4 ))}"; PIDS="${JC_SBX_PIDS:-512}"
+MAX_LINES="${JC_SBX_MAX_LINES:-200}"
+UIDGID="${JC_SBX_USER:-$(id -u):$(id -g)}"
+LOG="${TMPDIR:-/tmp}/jc-sandbox-last.log"
+
+# ── detect language ─────────────────────────────────────────────────────────
+LANG_=""
+if   [ -f "$DIR/Cargo.toml" ]; then LANG_=rust
+elif [ -f "$DIR/go.mod" ]; then LANG_=go
+elif [ -f "$DIR/package.json" ]; then LANG_=node
+else
+  for f in "$DIR"/pyproject.toml "$DIR"/setup.py "$DIR"/setup.cfg "$DIR"/requirements*.txt "$DIR"/pytest.ini "$DIR"/tox.ini; do
+    [ -e "$f" ] && { LANG_=python; break; }
+  done
+fi
+if [ -z "$LANG_" ] && [ -z "$CUSTOM" ]; then
+  echo "jc-sandbox: can't detect the project type in $DIR (no Cargo.toml, go.mod, package.json or Python project files)." >&2
+  echo "Pass a custom command after --, e.g.: jc-sandbox test -- make test (runs in the python image)" >&2
+  exit 2
+fi
+LANG_="${LANG_:-python}"
+
+if [ "$BACKEND" = auto ]; then
+  case "$LANG_" in rust|go) BACKEND=wasm ;; *) BACKEND=container ;; esac
+fi
+if [ "$BACKEND" = wasm ] && [ "$LANG_" = node ]; then
+  echo "jc-sandbox: Node.js test suites can't run in WebAssembly; using the container backend." >&2
+  BACKEND=container
+fi
+case "$BACKEND" in wasm|container) ;; *) echo "jc-sandbox: --backend must be auto, wasm or container" >&2; exit 2 ;; esac
+
+# ── images ──────────────────────────────────────────────────────────────────
+case "$LANG_:$BACKEND" in
+  python:container) IMAGE="${JC_SBX_PYTHON_IMAGE:-python:3.12-slim}" ;;
+  node:container)   IMAGE="${JC_SBX_NODE_IMAGE:-node:22-slim}" ;;
+  go:container)     IMAGE="${JC_SBX_GO_IMAGE:-golang:1.24}" ;;
+  rust:container)   IMAGE="${JC_SBX_RUST_IMAGE:-rust:1-slim}" ;;
+  python:wasm)      IMAGE="jean-claude-sandbox:python-wasm" ;;
+  go:wasm)          IMAGE="jean-claude-sandbox:go-wasm" ;;
+  rust:wasm)        IMAGE="jean-claude-sandbox:rust-wasm" ;;
+esac
+
+KEY="$(printf '%s' "$DIR" | sha1sum | cut -c1-12)"
+VOL="jc-sbx-${LANG_}-${BACKEND}-${KEY}"
+DEPS="${JC_SBX_CACHE:-$HOME/.cache/jean-claude-sandbox}/$VOL"
+
+# ── commands per language/backend ───────────────────────────────────────────
+PY_REQS='for f in requirements.txt requirements-dev.txt requirements-test.txt dev-requirements.txt test-requirements.txt requirements/dev.txt requirements/test.txt; do [ -f "$f" ] && set -- "$@" -r "$f"; done'
+node_pm() { # echo the package manager for this project
+  if [ -f "$DIR/pnpm-lock.yaml" ]; then echo pnpm; elif [ -f "$DIR/yarn.lock" ]; then echo yarn; else echo npm; fi
+}
+setup_cmd() {
+  case "$LANG_:$BACKEND" in
+    python:container) cat <<'EOF'
+set -e; python -m venv /deps/venv; . /deps/venv/bin/activate
+pip install -q -U pip
+set --
+EOF
+      echo "$PY_REQS"; cat <<'EOF'
+[ $# -gt 0 ] && pip install "$@"
+if [ -f pyproject.toml ] || [ -f setup.py ] || [ -f setup.cfg ]; then
+  pip install -e ".[test]" 2>/dev/null || pip install -e ".[dev]" 2>/dev/null || pip install -e . || true
+fi
+pip install -q pytest
+echo "deps ready: $(python --version), $(pip list 2>/dev/null | wc -l) packages"
+EOF
+      ;;
+    python:wasm) cat <<'EOF'
+set -e
+[ -f /opt/python-wasi/UNAVAILABLE ] && { cat /opt/python-wasi/UNAVAILABLE; exit 3; }
+V="$(cat /opt/python-wasi/VERSION)"
+set --
+EOF
+      echo "$PY_REQS"; cat <<'EOF'
+# Only pure-Python wheels can run inside WASI.
+pip install -q --break-system-packages --target /deps/wasi-site --only-binary :all: \
+  --implementation py --abi none --platform any --python-version "$V" "$@" pytest \
+  || { echo "Some dependencies are not pure-Python, so this project can't run in WASM. Use --backend container."; exit 3; }
+echo "pure-Python deps ready for WASI CPython $V"
+EOF
+      ;;
+    node:container)
+      case "$(node_pm)" in
+        pnpm) echo 'set -e; corepack enable --install-directory /tmp/bin; export PATH=/tmp/bin:$PATH; pnpm install --frozen-lockfile' ;;
+        yarn) echo 'set -e; corepack enable --install-directory /tmp/bin; export PATH=/tmp/bin:$PATH; yarn install --frozen-lockfile || yarn install --immutable' ;;
+        npm)  echo 'set -e; if [ -f package-lock.json ]; then npm ci; else npm install; fi' ;;
+      esac ;;
+    go:*)   echo 'set -e; go mod download && echo "go modules ready"' ;;
+    rust:*) echo 'set -e; cargo fetch && echo "crates ready"' ;;
+  esac
+}
+test_cmd() {
+  if [ -n "$CUSTOM" ]; then
+    case "$LANG_:$BACKEND" in
+      python:container) echo "[ -f /deps/venv/bin/activate ] && . /deps/venv/bin/activate; $CUSTOM" ;;
+      *) echo "$CUSTOM" ;;
+    esac
+    return
+  fi
+  case "$LANG_:$BACKEND" in
+    python:container) echo '[ -f /deps/venv/bin/activate ] || { echo "deps missing: run sandbox setup first"; exit 3; }; . /deps/venv/bin/activate; python -m pytest -q' ;;
+    python:wasm) cat <<'EOF'
+[ -d /deps/wasi-site ] || { echo "deps missing: run sandbox setup first"; exit 3; }
+exec wasmtime run \
+  --dir /opt/python-wasi::/py --dir /work::/work --dir /deps/wasi-site::/site --dir /tmp::/tmp \
+  --env PYTHONHOME=/py --env PYTHONPATH=/site:/work --env PYTHONDONTWRITEBYTECODE=1 --env HOME=/tmp \
+  /opt/python-wasi/python.wasm -m pytest /work --rootdir /work -q -s -p no:faulthandler -p no:cacheprovider
+EOF
+      ;;
+    node:container)
+      case "$(node_pm)" in
+        npm) echo 'npm test' ;;
+        *) echo "corepack enable --install-directory /tmp/bin && export PATH=/tmp/bin:\$PATH && $(node_pm) test" ;;
+      esac ;;
+    go:container) echo 'go test ./...' ;;
+    go:wasm) echo 'GOOS=wasip1 GOARCH=wasm go test -exec /usr/local/bin/jc-wasip1-exec ./...' ;;
+    rust:container) echo 'cargo test' ;;
+    rust:wasm) echo 'CARGO_TARGET_WASM32_WASIP1_RUNNER="wasmtime run --dir /work::/work --dir /tmp::/tmp --env HOME=/tmp" cargo test --target wasm32-wasip1' ;;
+  esac
+}
+
+# ── image + volume prep ─────────────────────────────────────────────────────
+ensure_image() {
+  docker image inspect "$IMAGE" >/dev/null 2>&1 && return 0
+  case "$IMAGE" in
+    jean-claude-sandbox:*)
+      echo "jc-sandbox: building $IMAGE (one time; needs network)…" >&2
+      docker build -q -t "$IMAGE" --target "${IMAGE#jean-claude-sandbox:}" "$SELF_DIR" >&2 || return 1 ;;
+    *) echo "jc-sandbox: pulling $IMAGE (one time)…" >&2; docker pull -q "$IMAGE" >&2 || return 1 ;;
+  esac
+}
+ensure_volume() {
+  # Per-project dependency cache, owned by the invoking user (no chown games needed).
+  mkdir -p "$DEPS" || { echo "jc-sandbox: can't create $DEPS" >&2; return 1; }
+}
+
+run_sandboxed() { # $1 = network mode, $2 = shell command
+  local name="jc-sbx-$$-$RANDOM" rc envs=()
+  case "$LANG_" in
+    go)   envs=(-e GOMODCACHE=/deps/gomod -e GOCACHE=/deps/gocache -e GOPATH=/deps/gopath -e GOFLAGS=-modcacherw) ;;
+    rust) envs=(-e CARGO_HOME=/deps/cargo -e CARGO_TARGET_DIR=/deps/target) ;;
+    node) envs=(-e npm_config_cache=/deps/npm-cache -e YARN_CACHE_FOLDER=/deps/yarn-cache -e PNPM_HOME=/deps/pnpm -e COREPACK_HOME=/deps/corepack) ;;
+    python) envs=(-e PIP_CACHE_DIR=/deps/pip-cache -e PIP_DISABLE_PIP_VERSION_CHECK=1) ;;
+  esac
+  [ "$1" = none ] && { [ "$LANG_" = go ] && envs+=(-e GOPROXY=off); [ "$LANG_" = rust ] && envs+=(-e CARGO_NET_OFFLINE=true); }
+  # rustup's toolchain lives in the image; keep it readable
+  [ "$LANG_" = rust ] && envs+=(-e RUSTUP_HOME=/usr/local/rustup)
+  timeout --foreground "$TIMEOUT" docker run --rm --init --name "$name" \
+    --network "$1" --read-only --tmpfs /tmp:rw,exec,size=2g \
+    --cap-drop ALL --security-opt no-new-privileges \
+    --pids-limit "$PIDS" --memory "$MEM" --cpus "$CPUS" \
+    -u "$UIDGID" -e HOME=/tmp -e CI=1 "${envs[@]}" \
+    -v "$DIR":/work -v "$DEPS":/deps -w /work \
+    --entrypoint sh "$IMAGE" -c "$2"
+  rc=$?
+  if [ "$rc" = 124 ]; then
+    docker kill "$name" >/dev/null 2>&1
+    echo "jc-sandbox: TIMEOUT after ${TIMEOUT}s — the run was killed." >&2
+  fi
+  return "$rc"
+}
+
+report() { # $1 = exit code
+  local total; total="$(wc -l < "$LOG")"
+  if [ "$total" -gt "$MAX_LINES" ]; then
+    echo "… (${total} lines total; showing the last ${MAX_LINES}; full log: $LOG)"
+    tail -n "$MAX_LINES" "$LOG"
+  else
+    cat "$LOG"
+  fi
+  echo "── jc-sandbox: mode=$MODE lang=$LANG_ backend=$BACKEND network=$2 exit=$1 ──"
+}
+
+if [ "$MODE" = info ]; then
+  printf 'dir=%s\nlang=%s\nbackend=%s\nimage=%s\ndeps=%s\n' "$DIR" "$LANG_" "$BACKEND" "$IMAGE" "$DEPS"
+  printf 'setup:\n%s\ntest:\n%s\n' "$(setup_cmd)" "$(test_cmd)"
+  exit 0
+fi
+
+ensure_image || { echo "jc-sandbox: could not get image $IMAGE" >&2; exit 2; }
+ensure_volume || exit 2
+
+if [ "$MODE" = setup ]; then
+  NETMODE=bridge; CMD="$(setup_cmd)"$'\n''touch /deps/.jc-setup-done'
+else
+  NETMODE="${NET:-none}"
+  CMD='[ -f /deps/.jc-setup-done ] || echo "jc-sandbox note: dependencies were never installed for this project; if imports or packages are missing, run the sandbox setup first." >&2'$'\n'"$(test_cmd)"
+fi
+run_sandboxed "$NETMODE" "$CMD" > "$LOG" 2>&1
+RC=$?
+report "$RC" "$NETMODE"
+exit "$RC"

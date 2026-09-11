@@ -31,7 +31,7 @@ if docker compose ps --status running --services 2>/dev/null | grep -qx ollama; 
   echo; bold "Ollama"; echo
   docker compose exec -T ollama ollama --version 2>/dev/null | sed 's/^/  /'
   echo "  GPU discovery (from logs):"
-  docker compose logs ollama 2>/dev/null | grep -iE 'inference compute|no compatible|vulkan|rocm|amdgpu|gfx11' | tail -n 6 | sed 's/^/    /'
+  docker compose logs ollama 2>/dev/null | grep -iE 'inference compute|no compatible|dropping|vulkan|rocm|amdgpu|gfx11' | tail -n 6 | sed 's/^/    /'
   echo "  models:"
   docker compose exec -T ollama ollama list 2>/dev/null | sed 's/^/    /'
   echo "  loaded (PROCESSOR should read 100% GPU on vulkan/rocm):"

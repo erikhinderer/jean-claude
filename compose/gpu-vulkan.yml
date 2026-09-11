@@ -15,5 +15,6 @@ services:
       - PERFMON
     environment:
       OLLAMA_VULKAN: "1"
+      # Ollama skips integrated GPUs (Radeon 860M/890M) unless this is set.
       OLLAMA_IGPU_ENABLE: "1"
       GGML_VK_VISIBLE_DEVICES: "${GGML_VK_VISIBLE_DEVICES:-0}"

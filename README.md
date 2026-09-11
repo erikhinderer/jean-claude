@@ -53,7 +53,7 @@ Other prompts that work well: *"Explain how data generation flows from the CLI t
 **What to expect:**
 
 - **The model sees search results, not the whole repo.** Retrieval sends it the chunks most relevant to your question, so specific questions ("how are bucket credentials handled?") get better answers than "check everything". For a whole-file review, attach individual files with **+** in the chat box instead.
-- **Small repos can be sent in full.** If a repo fits comfortably in the 64K-token context, turn on full-context mode in **Admin Panel → Settings → Documents** (*Bypass Embedding and Retrieval*). The model then gets complete files instead of excerpts.
+- **Small repos can be sent in full.** After attaching the knowledge base (or a file) in the chat box, click it and choose **Use Entire Document**. Open WebUI then sends the complete contents instead of search excerpts. This only works if the code fits in the 64K-token context; under ~20K tokens is where it beats search. The global switch is **Admin Panel → Settings → Documents → Bypass Embedding and Retrieval**. It applies to every chat and loads *every* file of an attached knowledge base, so leave it off for large repos.
 - **The chat UI is read-only.** Here Jean Claude can find bugs and propose fixes, but it can't edit files or run your tests. To have it make the changes and run the tests itself, use OpenCode (next section).
 - **Don't upload secrets.** Check the exported folder for credentials, keys or `.env` files before uploading. Anything in a knowledge base is visible to users you share it with.
 
@@ -77,7 +77,7 @@ git switch -c jean-claude/review      # work on a branch so every change is easy
 opencode
 ```
 
-Then ask in plain language. For example: *"Review this repository for bugs, run the tests, and fix anything that's broken. Explain each change before you make it."* When it's done, review the work with `git diff` and commit what you want to keep.
+Then ask in plain language. For example: *"Review this repository for bugs, run the tests, and fix anything that's broken. Explain each change before you make it."* Jean Claude runs the tests itself, inside the sandbox described in the next section. When it's done, review the work with `git diff` and commit what you want to keep.
 
 **Default permissions** (from `opencode/opencode.json.tmpl`):
 
@@ -85,13 +85,61 @@ Then ask in plain language. For example: *"Review this repository for bugs, run 
 |---|---|
 | Read, search and **edit files** in the project | **allow**: no prompts |
 | Read-only shell commands (`ls`, `cat`, `grep`, `find`, `git status/diff/log/show`) | allow |
-| Any other shell command (tests, installs, builds) and web fetches | ask |
+| Running tests via `run_tests_sandboxed` (no network, project folder only) | allow |
+| Installing test dependencies via `sandbox_setup` (network) | ask |
+| Test commands in the shell (`pytest`, `npm test`, `go test`, …) | deny: use the sandbox |
+| Any other shell command (installs, builds) and web fetches | ask |
 | Files outside the project folder | ask |
 | `git push`, `rm -rf`, `sudo` | deny |
 
 `opencode/AGENTS.md` holds Jean Claude's working rules: read the project first, make small focused changes, run the tests, suggest a branch, never touch secrets or push. To change permissions for everyone, edit the template and re-run `make opencode`. To change them for one project, add an `opencode.json` to that project's root. OpenCode merges project settings over the global config.
 
 **Speed:** OpenCode sends a large instruction prompt (~7K tokens) with the first request. On the Radeon 860M that takes roughly 40 seconds, and later steps are much faster because Ollama reuses the processed prompt. Keep `jean-claude` on the GPU (`make ps` should show `100% GPU`).
+
+## Sandboxed test runs (WebAssembly + container)
+
+Jean Claude runs its own tests through OpenCode, but never directly on the host. Two custom OpenCode tools (installed by `make opencode`) route every test run through `sandbox/jc-sandbox`:
+
+| Tool | What it does | Permission |
+|---|---|---|
+| `run_tests_sandboxed` | Detects the project and runs its tests in a sandbox. Returns the output (last 200 lines) and the exit code. | allow |
+| `sandbox_setup` | Installs the project's dependencies into its sandbox cache. This is the only step with network access. | **ask** |
+
+Test commands typed into the shell (`pytest`, `npm test`, `go test`, `cargo test`, `make test`, …) are **denied**, so tests go through the sandbox. The deny list catches the usual forms, not every possible spelling.
+
+**Which sandbox runs** (`--backend auto`):
+
+| Project | Detected by | Backend | How it runs |
+|---|---|---|---|
+| Rust | `Cargo.toml` | **WASM** | `cargo test --target wasm32-wasip1`, with each test binary executed by **Wasmtime** |
+| Go | `go.mod` | **WASM** | `GOOS=wasip1 GOARCH=wasm go test ./...`, executed by **Wasmtime** |
+| Python | `pyproject.toml`, `setup.py`, `requirements*.txt`, … | container | a virtualenv plus `python -m pytest` |
+| Node | `package.json` | container | `npm`/`pnpm`/`yarn test` (chosen from the lockfile) |
+
+- **Pure-Python projects** can opt into WASM with `backend: wasm`. That runs pytest on a WebAssembly build of CPython. Dependencies with compiled C extensions (for example the Couchbase SDK), sockets, threads and subprocesses aren't available there, and the tool says so if you try.
+- **Node.js** test suites can't run in WebAssembly, so they always use the container.
+
+**Isolation, both backends:**
+
+- **Network:** none during tests.
+- **Container:** a throwaway container with a read-only root filesystem, running as your user (non-root). All Linux capabilities are dropped, `no-new-privileges` is set, and CPU, memory, process-count and time are capped (defaults: 4 CPUs, 4 GB, 512 processes, 15 minutes).
+- **Files:** only the project folder is mounted, at `/work`, plus a per-project dependency cache at `~/.cache/jean-claude-sandbox/`.
+- **WASM adds a second boundary:** the tests themselves run inside Wasmtime. It sees only explicitly pre-opened directories and has no sockets.
+
+**Try it by hand:**
+
+```bash
+make sandbox-test DIR=~/github-erikhinderer/couchbase-data-generator SETUP=1   # first run: install deps, then test
+make sandbox-test DIR=~/github-erikhinderer/couchbase-data-generator           # later runs
+./sandbox/jc-sandbox info --dir <repo>          # show what it detected and the exact commands
+./sandbox/jc-sandbox test --dir <repo> -- python -m pytest tests/test_x.py -k name
+make sandbox-images                              # optional: pre-build the WASM images (otherwise built on first use)
+make sandbox-clean                               # delete all cached dependencies
+```
+
+Tuning (environment variables): `JC_SBX_TIMEOUT`, `JC_SBX_MEMORY`, `JC_SBX_CPUS`, `JC_SBX_PIDS`, `JC_SBX_MAX_LINES`, `JC_SBX_PYTHON_IMAGE` / `NODE_IMAGE` / `GO_IMAGE` / `RUST_IMAGE`, and `JC_SBX_CACHE`. The full log of the last run is at `/tmp/jc-sandbox-last.log`.
+
+**Integration tests that need a service** (for example a Couchbase cluster) fail offline by design. To allow them, start the service on a dedicated Docker network and run `jc-sandbox test --network <that-network>`. The sandbox can then reach only that network, not the internet.
 
 ## Architecture
 
@@ -115,6 +163,7 @@ Then ask in plain language. For example: *"Review this repository for bugs, run 
 | `compose/hub-image.yml` | Uses the published `erikhinderer/jean-claude` image for Ollama. |
 | `Dockerfile`, `docker/` | The `erikhinderer/jean-claude` image. |
 | `opencode/` | OpenCode config template and Jean Claude's agent rules (`make opencode`). |
+| `sandbox/` | `jc-sandbox` test runner and the WASM sandbox images (Wasmtime + Rust/Go/CPython-WASI). |
 | `scripts/` | `setup`, `host-tune-linux`, `init-model`, `bench`, `doctor`, `publish-image`, `install-opencode`. |
 
 The backend is chosen by `COMPOSE_FILE` in `.env`. To switch, run `make backend B=vulkan|rocm|cpu|native` and then `make up`.
@@ -237,6 +286,7 @@ make publish                   # linux/amd64 + linux/arm64 → :latest and :YYYY
 | `JC_NUM_CTX` | `65536` | Context window. The model's native maximum is 262144. |
 | `JC_NUM_THREAD` | empty / `12` on cpu | CPU threads. |
 | `JC_NUM_GPU` | empty | `999` forces every layer onto the GPU. |
+| `JC_NUM_BATCH` | empty (512) | Prompt batch size. Compare values with `./scripts/bench.sh --batch "512 1024 2048"`. |
 | `JC_PRELOAD` | `1` | Load the model into memory right after it's built. |
 | `OLLAMA_KV_CACHE_TYPE` | `q8_0` | Use `f16` for maximum fidelity, `q4_0` for very long contexts. |
 | `OLLAMA_TAG` / `OLLAMA_ROCM_TAG` | `latest` / `rocm` | Pin these (for example `0.33.3` / `0.33.3-rocm`) for reproducible builds. |

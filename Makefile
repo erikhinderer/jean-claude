@@ -59,6 +59,17 @@ bench-all: ## Benchmark vulkan, rocm and cpu back to back
 opencode: ## Install OpenCode on this host, wired to Jean Claude (reads/writes files)
 	@./scripts/install-opencode.sh
 
+sandbox-images: ## Pre-build the WASM sandbox images (rust/go/python + Wasmtime)
+	@for t in rust-wasm go-wasm python-wasm; do docker build -t jean-claude-sandbox:$$t --target $$t sandbox/ || exit 1; done
+
+sandbox-test: ## Run a repo's tests in the sandbox: make sandbox-test DIR=~/src/repo [SETUP=1]
+	@test -n "$(DIR)" || (echo "usage: make sandbox-test DIR=/path/to/repo [SETUP=1]" && exit 1)
+	@if [ -n "$(SETUP)" ]; then ./sandbox/jc-sandbox setup --dir "$(DIR)"; fi
+	@./sandbox/jc-sandbox test --dir "$(DIR)"
+
+sandbox-clean: ## Delete all cached sandbox dependencies (~/.cache/jean-claude-sandbox)
+	rm -rf "$$HOME/.cache/jean-claude-sandbox"
+
 image: ## Build the erikhinderer/jean-claude image locally
 	@./scripts/publish-image.sh --local
 
@@ -68,4 +79,4 @@ publish: ## Build + push erikhinderer/jean-claude to Docker Hub (docker login fi
 clean: ## Remove containers AND volumes (deletes model + chats)
 	@read -p "Delete model (~22 GB) and all chats? [y/N] " a && [ "$$a" = y ] && docker compose down -v || echo aborted
 
-.PHONY: help setup backend tune up down restart model update logs logs-init ps chat doctor bench bench-all opencode image publish clean
+.PHONY: help setup backend tune up down restart model update logs logs-init ps chat doctor bench bench-all opencode sandbox-images sandbox-test sandbox-clean image publish clean
