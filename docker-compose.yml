@@ -15,7 +15,8 @@ x-ollama-env: &ollama-env
   # Keep the 21.7 GB model resident so every chat doesn't pay a reload.
   OLLAMA_KEEP_ALIVE: "${OLLAMA_KEEP_ALIVE:--1}"
   # Single-user box: one model, one request slot. Parallel slots multiply KV-cache memory.
-  OLLAMA_MAX_LOADED_MODELS: "${OLLAMA_MAX_LOADED_MODELS:-1}"
+  # 2 = jean-claude + the small jean-claude-mini helper, both kept resident.
+  OLLAMA_MAX_LOADED_MODELS: "${OLLAMA_MAX_LOADED_MODELS:-2}"
   OLLAMA_NUM_PARALLEL: "${OLLAMA_NUM_PARALLEL:-1}"
   # Flash attention is required for a quantized KV cache; q8_0 halves KV memory vs f16.
   OLLAMA_FLASH_ATTENTION: "${OLLAMA_FLASH_ATTENTION:-1}"
@@ -64,6 +65,8 @@ services:
       JC_NUM_THREAD: "${JC_NUM_THREAD:-}"
       JC_NUM_GPU: "${JC_NUM_GPU:-}"
       JC_NUM_BATCH: "${JC_NUM_BATCH:-}"
+      JC_SMALL_BASE_MODEL: "${JC_SMALL_BASE_MODEL-qwen2.5:1.5b}"
+      JC_SMALL_MODEL_NAME: "${JC_SMALL_MODEL_NAME:-jean-claude-mini}"
       JC_UPDATE_BASE: "${JC_UPDATE_BASE:-0}"
       JC_PRELOAD: "${JC_PRELOAD:-1}"
     volumes:
@@ -83,6 +86,9 @@ services:
       WEBUI_SECRET_KEY: "${WEBUI_SECRET_KEY:?Run ./scripts/setup.sh (or make setup) to generate .env}"
       OLLAMA_BASE_URL: "${JC_OLLAMA_URL:-http://ollama:11434}"
       DEFAULT_MODELS: "${JC_MODEL_NAME:-jean-claude}:latest"
+      # Titles/tags/follow-ups on the small helper model (first start only; afterwards
+      # it's set in Admin Panel → Settings → Interface → Task Model).
+      TASK_MODEL: "${JC_TASK_MODEL:-jean-claude-mini:latest}"
       # Fully local: no OpenAI-compatible endpoints, no telemetry.
       ENABLE_OPENAI_API: "False"
       ANONYMIZED_TELEMETRY: "False"

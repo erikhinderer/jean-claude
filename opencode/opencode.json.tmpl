@@ -9,13 +9,33 @@
         "__MODEL__": {
           "name": "Jean Claude — Qwen3-Coder-30B-A3B Q5_K_M",
           "limit": { "context": __NUM_CTX__, "output": 8192 }
+        },
+        "__SMALL_MODEL__": {
+          "name": "Jean Claude helper (titles, summaries)",
+          "limit": { "context": __NUM_CTX__, "output": 2048 }
         }
       }
     }
   },
+  "enabled_providers": ["jean-claude"],
   "model": "jean-claude/__MODEL__",
-  "small_model": "jean-claude/__MODEL__",
+  "small_model": "jean-claude/__SMALL_MODEL__",
   "share": "disabled",
+  "autoupdate": "notify",
+  "lsp": true,
+  "compaction": { "auto": true, "prune": true, "reserved": 8192 },
+  "watcher": {
+    "ignore": ["node_modules/**", ".venv/**", "venv/**", "dist/**", "build/**", "target/**",
+               ".git/**", "__pycache__/**", ".pytest_cache/**", ".mypy_cache/**", "coverage/**"]
+  },
+  "agent": {
+    "build": { "temperature": 0.7, "top_p": 0.8 },
+    "plan": {
+      "temperature": 0.5,
+      "top_p": 0.8,
+      "permission": { "edit": "deny", "run_tests_sandboxed": "allow" }
+    }
+  },
   "permission": {
     "read": "allow",
     "edit": "allow",
@@ -23,6 +43,8 @@
     "grep": "allow",
     "external_directory": "ask",
     "webfetch": "ask",
+    "websearch": "deny",
+    "task": "deny",
     "run_tests_sandboxed": "allow",
     "sandbox_setup": "ask",
     "bash": {

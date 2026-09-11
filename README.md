@@ -67,7 +67,7 @@ The chat UI can't touch your files, but Jean Claude can work directly on a repos
 make opencode        # installs the OpenCode CLI and writes ~/.config/opencode/{opencode.json,AGENTS.md}
 ```
 
-This points OpenCode at the local Ollama API (`http://127.0.0.1:11434/v1`, model `jean-claude`, 64K context) for both its main and background tasks, so nothing goes to a cloud model. Any existing `opencode.json` is backed up first. Run `./scripts/install-opencode.sh --config` to rewrite only the config, for example after changing `JC_NUM_CTX`.
+This points OpenCode at the local Ollama API (`http://127.0.0.1:11434/v1`, model `jean-claude`, 64K context) (background tasks such as session titles use the small `jean-claude-mini` helper), and only that provider is enabled, so nothing goes to a cloud model. See *Harness tuning* below for the full set of settings. Any existing `opencode.json` is backed up first. Run `./scripts/install-opencode.sh --config` to rewrite only the config, for example after changing `JC_NUM_CTX`.
 
 **Use it:**
 
@@ -89,6 +89,7 @@ Then ask in plain language. For example: *"Review this repository for bugs, run 
 | Installing test dependencies via `sandbox_setup` (network) | ask |
 | Test commands in the shell (`pytest`, `npm test`, `go test`, …) | deny: use the sandbox |
 | Any other shell command (installs, builds) and web fetches | ask |
+| Subagents (`task`) and web search | deny (see *Harness tuning*) |
 | Files outside the project folder | ask |
 | `git push`, `rm -rf`, `sudo` | deny |
 
@@ -141,6 +142,36 @@ Tuning (environment variables): `JC_SBX_TIMEOUT`, `JC_SBX_MEMORY`, `JC_SBX_CPUS`
 
 **Integration tests that need a service** (for example a Couchbase cluster) fail offline by design. To allow them, start the service on a dedicated Docker network and run `jc-sandbox test --network <that-network>`. The sandbox can then reach only that network, not the internet.
 
+## Harness tuning (OpenCode)
+
+A local 30B model on an integrated GPU has two limits that a cloud setup doesn't: prompt processing is slow (~170–210 tokens/s on the Radeon 860M), and Ollama keeps **one cached conversation per model**. The OpenCode config (`opencode/opencode.json.tmpl`) and rules (`opencode/AGENTS.md`) are tuned around those limits:
+
+| Setting | Value | Why |
+|---|---|---|
+| `small_model` | `jean-claude-mini` (`qwen2.5:1.5b`, ~1 GB, loaded alongside) | OpenCode's background requests (session titles and summaries) go to a separate tiny model. On the main model they would replace its cached conversation, and the next turn would have to re-read the whole context, which takes tens of seconds. Open WebUI uses the same helper for titles and tags (`TASK_MODEL`). Needs `OLLAMA_MAX_LOADED_MODELS=2`. |
+| `enabled_providers` | `["jean-claude"]` only | OpenCode can never fall back to a cloud model. Some OpenCode versions silently sent title generation to a hosted model when no `small_model` was set. |
+| `lsp` | `true` | Language servers (pyright, gopls, rust-analyzer, TypeScript, …) send diagnostics back to the model after every edit. Syntax and type errors get caught immediately instead of at test time, which matters most for a smaller local model. Servers download on first use. |
+| `compaction` | `auto`, `prune: true`, `reserved: 8192` | Old tool outputs are pruned, and the session is summarized before it hits the 64K window. Shorter prompts are processed faster, and a long session won't overflow. |
+| `agent.build` | `temperature 0.7`, `top_p 0.8` | Qwen's recommended sampling for Qwen3-Coder, applied explicitly so OpenCode's defaults don't override the model's. |
+| `agent.plan` | `temperature 0.5`, file edits **denied** | *Plan* (switch with **Tab**) is for read-only review and planning. It can read, search and run sandboxed tests, but it can't change files. |
+| `task` (subagents) | **deny** | Subagents start separate conversations with their own large prompts. On one GPU with one slot they run in series and evict the main conversation's cache, so they add minutes without adding parallelism. Set it to `allow` to experiment. |
+| `websearch` | **deny** | Web search goes through an external service. `webfetch` (reading a URL you give it) stays at *ask*. |
+| `watcher.ignore` | `node_modules`, `.venv`, `target`, `dist`, `.git`, caches, … | Stops file-watch churn from dependency and build folders. |
+| `autoupdate` | `notify` | OpenCode tells you about updates instead of upgrading itself under a tuned config. |
+| `AGENTS.md` | context-budget rules | Tells Jean Claude to grep or glob first, read only the files and lines it needs, keep tool output short, iterate on a test subset, and suggest `/init` for projects without an AGENTS.md. |
+
+**Slash commands** (installed to `~/.config/opencode/commands/`). Each takes optional focus text, for example `/review error handling`:
+
+| Command | Agent | Does |
+|---|---|---|
+| `/review` | plan (read-only) | Baseline test run, then findings ranked by severity, each with file, line, evidence and suggested fix. No edits. |
+| `/fix-tests` | build | Runs the sandboxed tests and fixes failures at the root cause, re-running until the suite passes. |
+| `/bugsweep` | build | Suggests a branch, gets a baseline, lists bugs, fixes them one at a time with tests, and summarizes the before/after. |
+
+**Per project:** run **`/init`** once in each repository. OpenCode scans it and writes an `AGENTS.md` with its build, test and layout notes. Jean Claude then starts every session knowing the project instead of spending its slow prompt budget rediscovering it. Commit that file.
+
+**To change any of this:** edit `opencode/opencode.json.tmpl` or `opencode/AGENTS.md` and re-run `./scripts/install-opencode.sh --config`. To turn the helper model off, set `JC_SMALL_BASE_MODEL=` (empty) in `.env`, then run `make model` and `./scripts/install-opencode.sh --config`.
+
 ## Architecture
 
 ```
@@ -162,7 +193,7 @@ Tuning (environment variables): `JC_SBX_TIMEOUT`, `JC_SBX_MEMORY`, `JC_SBX_CPUS`
 | `ollama/Modelfile.tmpl` | The Jean Claude model: sampling settings, context size, tool-call parser, persona. |
 | `compose/hub-image.yml` | Uses the published `erikhinderer/jean-claude` image for Ollama. |
 | `Dockerfile`, `docker/` | The `erikhinderer/jean-claude` image. |
-| `opencode/` | OpenCode config template and Jean Claude's agent rules (`make opencode`). |
+| `opencode/` | OpenCode config template, Jean Claude's agent rules, sandbox tools and slash commands (`make opencode`). |
 | `sandbox/` | `jc-sandbox` test runner and the WASM sandbox images (Wasmtime + Rust/Go/CPython-WASI). |
 | `scripts/` | `setup`, `host-tune-linux`, `init-model`, `bench`, `doctor`, `publish-image`, `install-opencode`. |
 
@@ -184,7 +215,8 @@ The backend is chosen by `COMPOSE_FILE` in `.env`. To switch, run `make backend 
 | Q5_K_M weights | 21.7 GB |
 | KV cache, 64K context, `q8_0` (~48 KiB/token: 48 layers × 4 KV heads × 128 dim) | ~3.2 GB |
 | Compute buffers | ~1–2 GB |
-| **Jean Claude total** | **~27 GB** |
+| `jean-claude-mini` helper (1.5B, with its KV cache) | ~1.5 GB |
+| **Jean Claude total** | **~28.5 GB** |
 | OS + Docker + Open WebUI (incl. embedding model) | ~4–6 GB |
 
 This leaves plenty of room. You can raise `JC_NUM_CTX` to `131072` (~6.4 GB of KV) and still fit comfortably. At 256K the KV cache alone is ~13 GB, and prompt processing on an iGPU gets slow long before you fill it.
@@ -194,7 +226,7 @@ Runtime settings (`docker-compose.yml`):
 | Setting | Why |
 |---|---|
 | `OLLAMA_FLASH_ATTENTION=1` + `OLLAMA_KV_CACHE_TYPE=q8_0` | Halves KV-cache memory compared with f16, with negligible quality loss. A quantized KV cache requires flash attention. |
-| `OLLAMA_NUM_PARALLEL=1`, `OLLAMA_MAX_LOADED_MODELS=1` | This is a single-user box. Each extra parallel slot allocates another full context of KV cache. |
+| `OLLAMA_NUM_PARALLEL=1`, `OLLAMA_MAX_LOADED_MODELS=2` | This is a single-user box. Each extra parallel slot allocates another full context of KV cache. The second loaded model is the ~1 GB `jean-claude-mini` helper, so background title and summary requests never evict jean-claude's cached conversation. |
 | `OLLAMA_KEEP_ALIVE=-1` + `JC_PRELOAD=1` | Loads the 22 GB model once and keeps it in memory. No reload delay between chats. |
 | `OLLAMA_LOAD_TIMEOUT=15m` | The first load from SSD into GTT can be slow. |
 | Open WebUI: autocomplete and arena off, embeddings on CPU | Keeps background requests from queueing behind your chat on the one GPU. |
@@ -286,6 +318,7 @@ make publish                   # linux/amd64 + linux/arm64 → :latest and :YYYY
 | `JC_NUM_CTX` | `65536` | Context window. The model's native maximum is 262144. |
 | `JC_NUM_THREAD` | empty / `12` on cpu | CPU threads. |
 | `JC_NUM_GPU` | empty | `999` forces every layer onto the GPU. |
+| `JC_SMALL_BASE_MODEL` | `qwen2.5:1.5b` | Helper model built as `jean-claude-mini` for titles and summaries. Empty turns it off. |
 | `JC_NUM_BATCH` | empty (512) | Prompt batch size. Compare values with `./scripts/bench.sh --batch "512 1024 2048"`. |
 | `JC_PRELOAD` | `1` | Load the model into memory right after it's built. |
 | `OLLAMA_KV_CACHE_TYPE` | `q8_0` | Use `f16` for maximum fidelity, `q4_0` for very long contexts. |

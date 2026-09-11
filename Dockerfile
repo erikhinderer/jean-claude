@@ -20,7 +20,7 @@ LABEL org.opencontainers.image.title="Jean Claude" \
 # Runtime tuning (see README "How it's tuned for this hardware"); all overridable with -e.
 ENV OLLAMA_HOST=0.0.0.0:11434 \
     OLLAMA_KEEP_ALIVE=-1 \
-    OLLAMA_MAX_LOADED_MODELS=1 \
+    OLLAMA_MAX_LOADED_MODELS=2 \
     OLLAMA_NUM_PARALLEL=1 \
     OLLAMA_FLASH_ATTENTION=1 \
     OLLAMA_KV_CACHE_TYPE=q8_0 \
@@ -34,6 +34,8 @@ ENV OLLAMA_HOST=0.0.0.0:11434 \
     JC_NUM_THREAD= \
     JC_NUM_GPU= \
     JC_NUM_BATCH= \
+    JC_SMALL_BASE_MODEL=qwen2.5:1.5b \
+    JC_SMALL_MODEL_NAME=jean-claude-mini \
     JC_UPDATE_BASE=0 \
     JC_PRELOAD=1 \
     JC_SKIP_INIT=0

@@ -12,6 +12,8 @@ services:
       JC_NUM_THREAD: "${JC_NUM_THREAD:-}"
       JC_NUM_GPU: "${JC_NUM_GPU:-}"
       JC_NUM_BATCH: "${JC_NUM_BATCH:-}"
+      JC_SMALL_BASE_MODEL: "${JC_SMALL_BASE_MODEL-qwen2.5:1.5b}"
+      JC_SMALL_MODEL_NAME: "${JC_SMALL_MODEL_NAME:-jean-claude-mini}"
       JC_UPDATE_BASE: "${JC_UPDATE_BASE:-0}"
       JC_PRELOAD: "${JC_PRELOAD:-1}"
   model-init:

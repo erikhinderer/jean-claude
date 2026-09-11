@@ -43,9 +43,22 @@ fi
 # ── 2. write config + rules ────────────────────────────────────────────────
 mkdir -p "$CFG_DIR"
 new="$(mktemp)"
-sed -e "s|__OLLAMA_URL__|${URL}|g" -e "s|__MODEL__|${MODEL}|g" -e "s|__NUM_CTX__|${CTX}|g" \
-  opencode/opencode.json.tmpl > "$new"
-python3 -m json.tool "$new" >/dev/null || die "generated opencode.json is not valid JSON"
+SMALL="$(get_env JC_SMALL_MODEL_NAME)"; SMALL="${SMALL:-jean-claude-mini}"
+# Helper model is on unless .env sets JC_SMALL_BASE_MODEL= (empty) — same rule as docker-compose.
+if grep -qE '^JC_SMALL_BASE_MODEL=$' "$ENV_FILE" 2>/dev/null; then SMALL=""; fi
+python3 - opencode/opencode.json.tmpl "$new" "$URL" "$MODEL" "${SMALL:-$MODEL}" "$CTX" <<'PY' || die "could not render opencode.json"
+import json, sys
+tmpl, out, url, model, small, ctx = sys.argv[1:]
+s = (open(tmpl).read().replace("__OLLAMA_URL__", url).replace("__NUM_CTX__", ctx)
+     .replace("__SMALL_MODEL__", "@@SMALL@@").replace("__MODEL__", model))
+d = json.loads(s)
+models = d["provider"]["jean-claude"]["models"]
+helper = models.pop("@@SMALL@@")
+if small != model:
+    models[small] = helper
+d["small_model"] = "jean-claude/" + small
+json.dump(d, open(out, "w"), indent=2); open(out, "a").write("\n")
+PY
 
 for pair in "$new:opencode.json" "opencode/AGENTS.md:AGENTS.md"; do
   src="${pair%%:*}"; dst="$CFG_DIR/${pair##*:}"
@@ -61,6 +74,8 @@ REPO="$(pwd)"
 BIN_DIR="$HOME/.local/bin"; mkdir -p "$BIN_DIR" "$CFG_DIR/tools"
 ln -sf "$REPO/sandbox/jc-sandbox" "$BIN_DIR/jc-sandbox"
 info "linked $BIN_DIR/jc-sandbox -> $REPO/sandbox/jc-sandbox"
+mkdir -p "$CFG_DIR/commands"
+for c in opencode/commands/*.md; do cp "$c" "$CFG_DIR/commands/"; info "installed command /$(basename "$c" .md)"; done
 for t in opencode/tools/*.ts; do
   sed "s|__JC_SANDBOX__|$BIN_DIR/jc-sandbox|g" "$t" > "$CFG_DIR/tools/$(basename "$t")"
   info "installed tool $(basename "$t" .ts)"
